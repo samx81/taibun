@@ -13,9 +13,9 @@ with open(data_dir / "words.msgpack", 'rb') as f:
 
 with open(data_dir / "prons.msgpack", 'rb') as f:
     prons_dict = msgpack.unpackb(f.read(), raw=False)
-
-punctuations = ".,!?\"#$%&()*+/:;<=>@[\\]^`{|}~\t。．，、！？；：（）［］【】「」“”"
-punctuations_regex = re.compile(rf"([{punctuations}]\s*)")
+punct_cjk = "。．，、！？；：（）［］【】「」"
+punct_all = ".,!?\"#$%&()*+/:;<=>@[\\]^`{|}~\t“”"+punct_cjk
+punct_regex = re.compile(rf"([{punct_all}]\s*)")
 
 @dataclass
 class Sentence:
@@ -24,6 +24,16 @@ class Sentence:
     tone_format: str
     han_tokens: list[str]
     trans_tokens: list[str]
+
+    def __repr__(self):
+        han_output = []
+        tran_output = []
+        for h, t in zip(self.han_tokens, self.trans_tokens):
+            han_len = sum(2 if (is_cjk(c) or c in punct_cjk) else 1 for c in h)
+            common_len = max(han_len, len(Converter.norm_diacritic(t)))
+            han_output.append(h.ljust(common_len - len(h)))
+            tran_output.append(t.ljust(common_len))
+        return f"{' | '.join(han_output)}\n{' | '.join(tran_output)}"
 
     @property
     def segment_han(self):
@@ -301,7 +311,7 @@ class Converter(object):
     def __convert_tokenised(self, word):
         if word[0] in self.word_dict:
             word = (self.word_dict[word[0]],) + word[1:]
-        elif not self.convert_non_cjk or word[0] in punctuations:
+        elif not self.convert_non_cjk or word[0] in punct_all:
             return word[0]
         
         word = self.conversion_func(word).replace('---','--')
@@ -385,7 +395,7 @@ class Converter(object):
         if input.startswith(self.suffix_token) \
             and (input[-2:] == 'h4' or sandhi in ['auto','exc_last','incl_last'] or tone_format == 'number'):
             input = input[:-1] + '0'
-        input = self.__normalise(input)
+        input = self.norm_diacritic(input)
         return input
 
 
@@ -441,7 +451,7 @@ class Converter(object):
         return result_list
 
     @staticmethod
-    def __normalise(s):
+    def norm_diacritic(s):
         return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
 
 
@@ -453,14 +463,14 @@ class Converter(object):
             input = input.translate(str.maketrans('','',''.join(['ˋ','˪','ˊ','˫','˙'])))
         if self.system == 'ipa':
             input = input.translate(str.maketrans('','',''.join(['¹','²','³','⁴','⁵'])))
-        else: input = self.__normalise(input)
+        else: input = self.norm_diacritic(input)
         return input
 
 
     # Helper function to determine if an apostrophe is needed between two syllables
     def __needs_apostrophe(self, s1, s2):
-        s1n = self.__normalise(s1).lower()
-        s2n = self.__normalise(s2).lower()
+        s1n = self.norm_diacritic(s1).lower()
+        s2n = self.norm_diacritic(s2).lower()
         combined = s1n + s2n
 
         # Case 1: merges into a valid syllable
@@ -522,7 +532,7 @@ class Converter(object):
             output_tones = [self.__get_mark_tone(tone, self.placement, self.tones) for tone in output_tones]
         else:
             if poj:
-                output_tones = [self.__normalise(tone) for tone in output_tones]
+                output_tones = [self.norm_diacritic(tone) for tone in output_tones]
         
         output_tones = '-'.join(output_tones)
         return output_tones.replace(self.suffix_token, '--')
@@ -675,7 +685,7 @@ class Tokeniser(object):
         tokenised = [
             item 
             for word in tokenised 
-            for subword in re.split(punctuations_regex, word) if subword 
+            for subword in re.split(punct_regex, word) if subword 
             for item in subword.split(" ") if item
         ]
         return [
