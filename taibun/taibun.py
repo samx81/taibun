@@ -403,6 +403,9 @@ class Converter(object):
                 result_list[i] = (result_list[i][0], False)
         return result_list
 
+    def __normalise(self, s):
+        return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+
 
     # Helper function to remove tone markings
     def __strip_mark(self, input):
@@ -412,16 +415,14 @@ class Converter(object):
             input = input.translate(str.maketrans('','',''.join(['ˋ','˪','ˊ','˫','˙'])))
         if self.system == 'ipa':
             input = input.translate(str.maketrans('','',''.join(['¹','²','³','⁴','⁵'])))
-        else: input = "".join(c for c in unicodedata.normalize("NFD", input) if unicodedata.category(c) != "Mn")
+        else: input = self.__normalise(input)
         return input
 
 
     # Helper function to determine if an apostrophe is needed between two syllables
     def __needs_apostrophe(self, s1, s2):
-        def normalise(s):
-            return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn").lower()
-        s1n = normalise(s1)
-        s2n = normalise(s2)
+        s1n = self.__normalise(s1).lower()
+        s2n = self.__normalise(s2).lower()
 
         combined = s1n + s2n
 
