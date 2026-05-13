@@ -181,6 +181,7 @@ class Converter(object):
                     return self.singapore_prons.get(key, default)
                 return self.prons_dict.get(key, default)
 
+        # NOTE: build mental model here
         class WordDict:
             def __init__(self, word_dict, prons_dict, dialect, singapore_words):
                 self.word_dict = word_dict
@@ -272,8 +273,6 @@ class Converter(object):
         
         word = self.conversion_func(word).replace('---','--')
 
-        if self.format == 'number' and self.system in ['tailo','poj']:
-            word = self.__mark_to_number(word)
         if self.format == 'strip':
             word = self.__strip_mark(word)
 
@@ -474,18 +473,26 @@ class Converter(object):
     ### Tai-lo to other transliteration systems converting
 
     # Helper to convert syllable from Tai-lo to Tai-lo
-    def __tailo_to_tailo(self, input):
-        input = '-'.join(self.__get_mark_tone(self.__convert_variant(nt), self.placement, self.tones) for nt in self.__get_number_tones(input))
+    def __tailo_to_tailo(self, input, poj=False):
+        output_tones = self.__get_number_tones(input)
+        output_tones = [self.__convert_variant(nt) for nt in output_tones]
+
+        if self.format != 'number':
+            output_tones = [self.__get_mark_tone(tone, self.placement, self.tones) for tone in output_tones]
+
+        input = '-'.join(output_tones)
         return input.replace(self.suffix_token, '--')
 
 
     # Helper to convert syllable from Tai-lo to POJ
     def __tailo_to_poj(self, input):
-        number_tones = self.__get_number_tones(input)
-        input = '-'.join(
-            self.__get_mark_tone(self.__replacement_tool(self.convert, self.__convert_variant(nt)), self.placement, self.tones) 
-            for nt in number_tones
-        )
+        output_tones = self.__get_number_tones(input)
+        output_tones = [self.__replacement_tool(self.convert, self.__convert_variant(nt)) for nt in output_tones]
+        output_tones = [self.__get_mark_tone(tone, self.placement, self.tones) for tone in output_tones]
+        if self.format == 'number':
+            output_tones = [self.__mark_to_number(tone) for tone in output_tones]
+
+        input = '-'.join(output_tones)
         return input.replace(self.suffix_token, '--')
 
 
