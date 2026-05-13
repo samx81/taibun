@@ -196,7 +196,7 @@ class Converter(object):
                 parts = [s for s in re.split('(--|-)', value.lower()) if s]
                 variations = {
                     char: {
-                        varies[0]: (varies[1] if len(varies := variation.split('/')) > 1 else varies[0])
+                        variation.split('/')[0]: (varies[1] if len(varies := variation.split('/')) > 1 else varies[0])
                            for variation in self.prons_dict.get(char, [])
                         } 
                     for char in key
@@ -360,11 +360,12 @@ class Converter(object):
 
     # Helper to convert syllable from Tai-lo number tones to diacritic tones
     def __get_mark_tone(self, input, placement, tones):
+        syllable, number = input[:-1], int(input[-1])
         for s in placement:
-            if s.replace(self.tt, '') in input:
-                input = input.replace(s.replace(self.tt, ''), s.replace(self.tt, tones[int(input[-1])]))
+            if (target := s.replace(self.tt, '')) in syllable:
+                syllable = syllable.replace(target, s.replace(self.tt, tones[number]))
                 break
-        return unicodedata.normalize('NFC', input[:-1])
+        return unicodedata.normalize('NFC', syllable)
 
 
     # Helper to apply tone sandhi to a word
@@ -503,7 +504,9 @@ class Converter(object):
 
     # Helper to convert syllable from Tai-lo to TLPA
     def __tailo_to_tlpa(self, input):
-        input = '-'.join(self.__replacement_tool(self.convert, self.__convert_variant(nt)) for nt in self.__get_number_tones(input))
+        output_tones = self.__get_number_tones(input)
+        output_tones = [self.__replacement_tool(self.convert, self.__convert_variant(nt)) for nt in output_tones]
+        input = '-'.join(output_tones)
         return input.replace(self.suffix_token, '')
 
 
