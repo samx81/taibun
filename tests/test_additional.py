@@ -1,6 +1,7 @@
 import unittest
 
-from taibun.taibun import Converter, is_cjk, to_simplified, to_traditional
+from taibun.taibun import Converter
+from taibun.utils import is_cjk, to_simplified, to_traditional
 
 
 class TestAdditional(unittest.TestCase):

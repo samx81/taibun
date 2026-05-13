@@ -17,6 +17,8 @@ def checker(self, array, general_converter, north_converter):
 
         # Test general
         result = general_converter.get(hanji)
+        if general_converter.output_tokens:
+            result = result.trans_tokens
         self.assertEqual(
             expected_general,
             result,
@@ -26,6 +28,8 @@ def checker(self, array, general_converter, north_converter):
         # Test north if present
         if expected_north is not None:
             result_north = north_converter.get(hanji)
+            if north_converter.output_tokens:
+                result_north = result_north.trans_tokens
             self.assertEqual(
                 expected_north,
                 result_north,

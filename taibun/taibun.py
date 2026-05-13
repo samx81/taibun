@@ -1,51 +1,97 @@
-import os
 import re
 import unicodedata
+from pathlib import Path
+from dataclasses import dataclass
 
 import msgpack
 
-data_dir = os.path.join(os.path.dirname(__file__), "data")
-with open(os.path.join(data_dir, "words.msgpack"), 'rb') as f:
+from taibun.utils import is_cjk, to_traditional
+
+data_dir = Path(__file__).parent / "data"
+with open(data_dir / "words.msgpack", 'rb') as f:
     word_dict = msgpack.unpackb(f.read(), raw=False)
-with open(os.path.join(data_dir, "traditional.msgpack"), 'rb') as f:
-    trad_dict = msgpack.unpackb(f.read(), raw=False)
-with open(os.path.join(data_dir, "simplified.msgpack"), 'rb') as f:
-    simp_dict = {**{v: k for k, v in trad_dict.items() if len(k) == 1}, **msgpack.unpackb(f.read(), raw=False)}
-with open(os.path.join(data_dir, "vars.msgpack"), 'rb') as f:
-    vars_dict = msgpack.unpackb(f.read(), raw=False)
-with open(os.path.join(data_dir, "prons.msgpack"), 'rb') as f:
+
+with open(data_dir / "prons.msgpack", 'rb') as f:
     prons_dict = msgpack.unpackb(f.read(), raw=False)
+punct_cjk = "。．，、！？；：（）［］【】「」"
+punct_all = ".,!?\"#$%&()*+/:;<=>@[\\]^`{|}~\t“”"+punct_cjk
+punct_regex = re.compile(rf"([{punct_all}]\s*)")
 
-# Helper to check if the character is a Chinese character
-def is_cjk(input):
-    return all(
-        0x4E00 <= ord(char) <= 0x9FFF or  # BASIC
-        0x3400 <= ord(char) <= 0x4DBF or  # Ext A
-        0x20000 <= ord(char) <= 0x2A6DF or  # Ext B
-        0x2A700 <= ord(char) <= 0x2EBEF or  # Ext C,D,E,F
-        0x30000 <= ord(char) <= 0x323AF or  # Ext G,H
-        0x2EBF0 <= ord(char) <= 0x2EE5F  # Ext I
-        for char in input
-    )
+@dataclass
+class Sentence:
+    sent: str
+    system: str
+    tone_format: str
+    han_tokens: list[str]
+    trans_tokens: list[str]
 
-# Convert Traditional to Simplified characters
-def to_simplified(input):
-    return ''.join(simp_dict.get(c, c) for c in input)
+    def __repr__(self):
+        han_output = []
+        tran_output = []
+        for h, t in zip(self.han_tokens, self.trans_tokens):
+            han_len = sum(2 if (is_cjk(c) or c in punct_cjk) else 1 for c in h)
+            common_len = max(han_len, len(Converter.norm_diacritic(t)))
+            han_output.append(h.ljust(common_len - len(h)))
+            tran_output.append(t.ljust(common_len))
+        return f"{' | '.join(han_output)}\n{' | '.join(tran_output)}"
 
-# Convert Simplified to Traditional characters
-def to_traditional(input):
-    input = ''.join(vars_dict.get(c, c) for c in input)
-    traditional = []
-    while input:
-        for j in range(4, 0, -1):
-            if len(input) < j:
-                continue
-            word = input[:j]
-            if word in trad_dict or j == 1:
-                traditional.append(trad_dict.get(word, word))
-                input = input[j:]
-                break
-    return "".join(traditional)
+    @property
+    def segment_han(self):
+        return " ".join(self.han_tokens)
+
+    @property
+    def segment_trans(self):
+        return " ".join(self.trans_tokens)
+    
+    def to_number(self):
+        if self.tone_format == 'number':
+            return self.trans_tokens
+        else:
+            return [Converter(tone_format='number').mark_to_number(tk, han) for tk, han in zip(self.trans_tokens, self.han_tokens)]
+        
+    ### Converted output formatting
+    def convert_punctuation_western(self):
+        punctuation_mapping = {
+            '。':'.', '．':' ', '，':',', '、':',', '！':'!', '？':'?', '；':';', '：':':',
+            '）':')', '］':']', '】':']', '（':'(', '［':'[', '【':'['
+        }
+        tokens = [punctuation_mapping.get(token, token) for token in self.trans_tokens]
+        tokens = self.__format_text(tokens)
+        return tokens
+
+    # Helper to convert Chinese punctuation to Latin punctuation with appropriate spacing
+    def format_punctuation_western(self):
+        left_space = {'.':'.', ',':',', '!':'!', '?':'?', ';':';', ':':':', ')':')', ']':']', '」':'"', '”':'"', '--':'--'}
+        right_space = {'(':'(', '[':'[', '「':'"', '“':'"'}
+        western_tokens = self.convert_punctuation_western()
+        complete_sent = ' '.join(western_tokens).strip()
+        for left, space in left_space.items():
+            complete_sent = complete_sent.replace(' ' + left, space).replace(left, space)
+        for right, space in right_space.items():
+            complete_sent = complete_sent.replace(right + ' ', space).replace(right, space) 
+        return complete_sent
+    
+
+    # Helper to restore original CJK punctuation with appropriate spacing
+    def format_punctuation_cjk(self):
+        complete_sent = ' '.join(self.trans_tokens).strip()
+        left_space = ['。', '．', '，', '、', '！', '？', '；', '：', '）', '］', '】', '」', '”', '--']
+        right_space = ['（', '［', '【', '「', '“']
+        for punct in left_space:
+            complete_sent = complete_sent.replace(' ' + punct + ' ', punct).replace(' ' + punct, punct)
+        for punct in right_space:
+            complete_sent = complete_sent.replace(' ' + punct + ' ', punct).replace(punct + ' ', punct)
+        return complete_sent
+
+    
+    # Helper to capitalise text in according to punctuation
+    def __format_text(self, tokens):
+        capitalise_next = True
+        for i, t in enumerate(tokens):
+            if capitalise_next and t:
+                tokens[i] = t[0].upper() + t[1:]
+            capitalise_next = t in {'.', '!', '?'}
+        return tokens
 
 
 """
@@ -109,10 +155,14 @@ class Converter(object):
         '咖啡': { '咖': { 'ka':'ko' } }
     }
 
-    def __init__(self, system='Tailo', dialect='south', format='mark', delimiter=DEFAULT_DELIMITER, apostrophe=DEFAULT_APOSTROPHE, sandhi=DEFAULT_SANDHI, punctuation='format', convert_non_cjk=False, output_tokens=False):
+    def __init__(
+        self, system='Tailo', dialect='south', tone_format='mark', 
+        delimiter=DEFAULT_DELIMITER, apostrophe=DEFAULT_APOSTROPHE, sandhi=DEFAULT_SANDHI, 
+        punctuation='format', convert_non_cjk=False, output_tokens=False
+    ):
         self.system = system.lower()
         self.dialect = dialect.lower()
-        self.format = format
+        self.tone_format = tone_format
         self.delimiter = delimiter if delimiter != self.DEFAULT_DELIMITER else self.__set_default_delimiter()
         self.apostrophe = apostrophe if apostrophe != self.DEFAULT_APOSTROPHE else self.__set_default_apostrophe()
         self.sandhi = sandhi if sandhi != self.DEFAULT_SANDHI else self.__set_default_sandhi()
@@ -120,6 +170,7 @@ class Converter(object):
         self.convert_non_cjk = convert_non_cjk
         self.output_tokens = output_tokens
         self.__declarations(dialect.lower())
+        self.tokenizer = Tokeniser(False)
 
 
     # Helper to declare system-specific conversion information
@@ -127,22 +178,25 @@ class Converter(object):
         # Conversion
         self.conversion_func = {
             'poj': self.__tailo_to_poj,
+            'tailo': self.__tailo_to_tailo,
             'zhuyin': self.__tailo_to_zhuyin,
             'tlpa': self.__tailo_to_tlpa,
             'pingyim': self.__tailo_to_pingyim,
             'tongiong': self.__tailo_to_ti,
             'ipa': self.__tailo_to_ipa,
-            'tailo': self.__tailo_to_tailo
         }.get(self.system, lambda word: word[0])
 
         config = self.SYSTEM_CONFIGS.get(self.system)
-        if 'tones' in config: self.tones = config['tones']
+        if 'tones' in config: 
+            self.tones = config['tones']
         if 'placement' in config: 
             first_part = config['placement'][:-2]
             last_part = config['placement'][-2:]
             self.placement = [s[0].upper() + s[1:] for s in first_part] + first_part + [s[0].upper() + s[1:] for s in last_part] + last_part
-        if 'convert' in config: self.convert = {**{k[0].upper() + k[1:]: v[0].upper() + v[1:] for k, v in config['convert'].items()}, **config['convert']}
-        if 'convert2' in config: self.convert2 = {**{k[0].upper() + k[1:]: v[0].upper() + v[1:] for k, v in config['convert2'].items()}, **config['convert2']}
+        if 'convert' in config: 
+            self.convert = {**{k[0].upper() + k[1:]: v[0].upper() + v[1:] for k, v in config['convert'].items()}, **config['convert']}
+        if 'convert2' in config: 
+            self.convert2 = {**{k[0].upper() + k[1:]: v[0].upper() + v[1:] for k, v in config['convert2'].items()}, **config['convert2']}
 
         # Dialect
         self.sandhi_conversion = {'1':'7','7':'3','3':'2','2':'1','5':'7','p4':'p8','t4':'t8','k4':'k8','h4':'2','p8':'p4','t8':'t4','k8':'k4','h8':'3'}
@@ -150,7 +204,8 @@ class Converter(object):
 
         # Apostrophe
         if self.apostrophe:
-            syllables = ['a','ah','ai','aih','ainn','ak','am','an','ang','ann','ap','at','au','ba','bah','bai','bak','ban','bang','bat','bau','be','beh','bi','bian','biat','biau','bih','bik','bin','bing','bio','bit','biu','bo','bok','bong','boo','bu','bua','buah','buan','buat','bue','bueh','bui','bun','but','e','eh','enn','ga','gai','gak','gam','gan','gang','gau','ge','geh','gi','gia','giah','giak','giam','gian','giang','giap','giat','giau','gik','gim','gin','ging','gio','gioh','giok','giong','giu','go','gok','gong','goo','gu','gua','guan','guat','gue','gueh','gui','gun','ha','hah','hai','haih','hainn','hak','ham','han','hang','hann','hannh','hap','hat','hau','haunnh','he','heh','hi','hia','hiah','hiam','hian','hiang','hiann','hiannh','hiap','hiat','hiau','hiauh','hik','him','hin','hing','hinn','hio','hioh','hiok','hiong','hip','hit','hiu','hiunn','hm','hmh','hng','hngh','ho','hoh','hok','hong','honn','honnh','hoo','hooh','hu','hua','huah','huai','huainn','huan','huann','huat','hue','hueh','hui','huih','huinn','hun','hut','i','ia','iah','iam','ian','iang','iann','iap','iat','iau','iaunn','ik','im','in','ing','inn','io','ioh','iok','iong','ip','it','iu','iunn','ji','jia','jiah','jiam','jian','jiang','jiap','jiat','jiau','jim','jin','jio','jiok','jiong','jip','jit','jiu','ju','juah','jue','jun','ka','kah','kai','kainn','kak','kam','kan','kang','kann','kap','kat','kau','kauh','ke','keh','kenn','kha','khah','khai','khainn','khak','kham','khan','khang','khann','khap','khat','khau','khaunnh','khe','kheh','khenn','khennh','khi','khia','khiah','khiak','khiam','khian','khiang','khiap','khiat','khiau','khih','khik','khim','khin','khing','khinn','khio','khioh','khiok','khiong','khip','khit','khiu','khiunn','khng','khngh','kho','khok','khong','khoo','khu','khua','khuah','khuai','khuan','khuann','khuat','khue','khueh','khuh','khui','khuinn','khun','khut','ki','kia','kiah','kiam','kian','kiann','kiap','kiat','kiau','kih','kik','kim','kin','king','kinn','kio','kioh','kiok','kiong','kip','kiu','kiunn','kng','ko','koh','kok','kong','konn','koo','ku','kua','kuah','kuai','kuainn','kuan','kuann','kuat','kue','kueh','kui','kuih','kuinn','kun','kut','la','lah','lai','lak','lam','lan','lang','lap','lat','lau','lauh','le','leh','li','lia','liah','liam','lian','liang','liap','liat','liau','lih','lik','lim','lin','ling','lio','lioh','liok','liong','lip','lit','liu','lo','loh','lok','long','loo','looh','lop','lu','lua','luah','luan','luat','lue','lueh','luh','lui','lun','lut','m','ma','mah','mai','mau','mauh','me','meh','mi','mia','mian','miau','mih','mng','mngh','moo','mooh','mua','mue','mui','na','nah','nai','nau','nauh','ne','neh','ng','nga','ngai','ngau','nge','ngeh','ngi','ngia','ngiau','ngiauh','ngiu','ngoo','ni','nia','niau','nih','niu','nng','noo','nua','o','oh','ok','om','ong','onn','oo','ooh','pa','pah','pai','pak','pan','pang','pat','pau','pe','peh','penn','pha','phah','phai','phainn','phak','phan','phang','phann','phau','phauh','phe','pheh','phenn','phi','phiah','phiak','phian','phiang','phiann','phiat','phiau','phih','phik','phin','phing','phinn','phio','phit','phngh','pho','phoh','phok','phong','phoo','phu','phua','phuah','phuan','phuann','phuat','phue','phueh','phuh','phui','phun','phut','pi','piah','piak','pian','piang','piann','piat','piau','pih','pik','pin','ping','pinn','pio','pit','piu','png','po','poh','pok','pong','poo','pu','pua','puah','puan','puann','puat','pue','pueh','puh','pui','puinn','pun','put','sa','sah','sai','sak','sam','san','sang','sann','sannh','sap','sat','sau','se','seh','senn','si','sia','siah','siak','siam','sian','siang','siann','siap','siat','siau','sih','sik','sim','sin','sing','sinn','sio','sioh','siok','siong','sip','sit','siu','siunn','sng','so','soh','sok','som','song','soo','su','sua','suah','suainn','suan','suann','suat','sue','sueh','suh','sui','sun','sut','ta','tah','tai','tainn','tak','tam','tan','tang','tann','tap','tat','tau','tauh','te','teh','tenn','tha','thah','thai','thak','tham','than','thang','thann','thap','that','thau','the','theh','thenn','thi','thiah','thiam','thian','thiann','thiap','thiat','thiau','thih','thik','thim','thin','thing','thinn','thio','thiok','thiong','thiu','thng','tho','thoh','thok','thong','thoo','thu','thua','thuah','thuan','thuann','thuat','thue','thuh','thui','thun','thut','ti','tia','tiah','tiak','tiam','tian','tiann','tiap','tiat','tiau','tih','tik','tim','tin','ting','tinn','tio','tioh','tiok','tiong','tit','tiu','tiuh','tiunn','tng','to','toh','tok','tom','tong','too','tsa','tsah','tsai','tsainn','tsak','tsam','tsan','tsang','tsann','tsap','tsat','tsau','tse','tseh','tsenn','tsha','tshah','tshai','tshak','tsham','tshan','tshang','tshann','tshap','tshat','tshau','tshauh','tshe','tsheh','tshenn','tshi','tshia','tshiah','tshiak','tshiam','tshian','tshiang','tshiann','tshiap','tshiat','tshiau','tshih','tshik','tshim','tshin','tshing','tshinn','tshio','tshioh','tshiok','tshiong','tship','tshit','tshiu','tshiunn','tshng','tshngh','tsho','tshoh','tshok','tshong','tshoo','tshu','tshua','tshuah','tshuan','tshuang','tshuann','tshue','tshueh','tshuh','tshui','tshun','tshut','tsi','tsia','tsiah','tsiam','tsian','tsiang','tsiann','tsiap','tsiat','tsiau','tsih','tsik','tsim','tsin','tsing','tsinn','tsio','tsioh','tsiok','tsiong','tsip','tsit','tsiu','tsiuh','tsiunn','tsng','tso','tsoh','tsok','tsong','tsoo','tsu','tsua','tsuah','tsuainn','tsuan','tsuann','tsuat','tsue','tsueh','tsuh','tsui','tsun','tsut','tu','tua','tuah','tuan','tuann','tuat','tue','tuh','tui','tuinn','tun','tut','u','ua','uah','uai','uainn','uan','uang','uann','uat','ue','ueh','uh','ui','uih','uinn','un','ut']
+            syllables = [
+                'a','ah','ai','aih','ainn','ak','am','an','ang','ann','ap','at','au','ba','bah','bai','bak','ban','bang','bat','bau','be','beh','bi','bian','biat','biau','bih','bik','bin','bing','bio','bit','biu','bo','bok','bong','boo','bu','bua','buah','buan','buat','bue','bueh','bui','bun','but','e','eh','enn','ga','gai','gak','gam','gan','gang','gau','ge','geh','gi','gia','giah','giak','giam','gian','giang','giap','giat','giau','gik','gim','gin','ging','gio','gioh','giok','giong','giu','go','gok','gong','goo','gu','gua','guan','guat','gue','gueh','gui','gun','ha','hah','hai','haih','hainn','hak','ham','han','hang','hann','hannh','hap','hat','hau','haunnh','he','heh','hi','hia','hiah','hiam','hian','hiang','hiann','hiannh','hiap','hiat','hiau','hiauh','hik','him','hin','hing','hinn','hio','hioh','hiok','hiong','hip','hit','hiu','hiunn','hm','hmh','hng','hngh','ho','hoh','hok','hong','honn','honnh','hoo','hooh','hu','hua','huah','huai','huainn','huan','huann','huat','hue','hueh','hui','huih','huinn','hun','hut','i','ia','iah','iam','ian','iang','iann','iap','iat','iau','iaunn','ik','im','in','ing','inn','io','ioh','iok','iong','ip','it','iu','iunn','ji','jia','jiah','jiam','jian','jiang','jiap','jiat','jiau','jim','jin','jio','jiok','jiong','jip','jit','jiu','ju','juah','jue','jun','ka','kah','kai','kainn','kak','kam','kan','kang','kann','kap','kat','kau','kauh','ke','keh','kenn','kha','khah','khai','khainn','khak','kham','khan','khang','khann','khap','khat','khau','khaunnh','khe','kheh','khenn','khennh','khi','khia','khiah','khiak','khiam','khian','khiang','khiap','khiat','khiau','khih','khik','khim','khin','khing','khinn','khio','khioh','khiok','khiong','khip','khit','khiu','khiunn','khng','khngh','kho','khok','khong','khoo','khu','khua','khuah','khuai','khuan','khuann','khuat','khue','khueh','khuh','khui','khuinn','khun','khut','ki','kia','kiah','kiam','kian','kiann','kiap','kiat','kiau','kih','kik','kim','kin','king','kinn','kio','kioh','kiok','kiong','kip','kiu','kiunn','kng','ko','koh','kok','kong','konn','koo','ku','kua','kuah','kuai','kuainn','kuan','kuann','kuat','kue','kueh','kui','kuih','kuinn','kun','kut','la','lah','lai','lak','lam','lan','lang','lap','lat','lau','lauh','le','leh','li','lia','liah','liam','lian','liang','liap','liat','liau','lih','lik','lim','lin','ling','lio','lioh','liok','liong','lip','lit','liu','lo','loh','lok','long','loo','looh','lop','lu','lua','luah','luan','luat','lue','lueh','luh','lui','lun','lut','m','ma','mah','mai','mau','mauh','me','meh','mi','mia','mian','miau','mih','mng','mngh','moo','mooh','mua','mue','mui','na','nah','nai','nau','nauh','ne','neh','ng','nga','ngai','ngau','nge','ngeh','ngi','ngia','ngiau','ngiauh','ngiu','ngoo','ni','nia','niau','nih','niu','nng','noo','nua','o','oh','ok','om','ong','onn','oo','ooh','pa','pah','pai','pak','pan','pang','pat','pau','pe','peh','penn','pha','phah','phai','phainn','phak','phan','phang','phann','phau','phauh','phe','pheh','phenn','phi','phiah','phiak','phian','phiang','phiann','phiat','phiau','phih','phik','phin','phing','phinn','phio','phit','phngh','pho','phoh','phok','phong','phoo','phu','phua','phuah','phuan','phuann','phuat','phue','phueh','phuh','phui','phun','phut','pi','piah','piak','pian','piang','piann','piat','piau','pih','pik','pin','ping','pinn','pio','pit','piu','png','po','poh','pok','pong','poo','pu','pua','puah','puan','puann','puat','pue','pueh','puh','pui','puinn','pun','put','sa','sah','sai','sak','sam','san','sang','sann','sannh','sap','sat','sau','se','seh','senn','si','sia','siah','siak','siam','sian','siang','siann','siap','siat','siau','sih','sik','sim','sin','sing','sinn','sio','sioh','siok','siong','sip','sit','siu','siunn','sng','so','soh','sok','som','song','soo','su','sua','suah','suainn','suan','suann','suat','sue','sueh','suh','sui','sun','sut','ta','tah','tai','tainn','tak','tam','tan','tang','tann','tap','tat','tau','tauh','te','teh','tenn','tha','thah','thai','thak','tham','than','thang','thann','thap','that','thau','the','theh','thenn','thi','thiah','thiam','thian','thiann','thiap','thiat','thiau','thih','thik','thim','thin','thing','thinn','thio','thiok','thiong','thiu','thng','tho','thoh','thok','thong','thoo','thu','thua','thuah','thuan','thuann','thuat','thue','thuh','thui','thun','thut','ti','tia','tiah','tiak','tiam','tian','tiann','tiap','tiat','tiau','tih','tik','tim','tin','ting','tinn','tio','tioh','tiok','tiong','tit','tiu','tiuh','tiunn','tng','to','toh','tok','tom','tong','too','tsa','tsah','tsai','tsainn','tsak','tsam','tsan','tsang','tsann','tsap','tsat','tsau','tse','tseh','tsenn','tsha','tshah','tshai','tshak','tsham','tshan','tshang','tshann','tshap','tshat','tshau','tshauh','tshe','tsheh','tshenn','tshi','tshia','tshiah','tshiak','tshiam','tshian','tshiang','tshiann','tshiap','tshiat','tshiau','tshih','tshik','tshim','tshin','tshing','tshinn','tshio','tshioh','tshiok','tshiong','tship','tshit','tshiu','tshiunn','tshng','tshngh','tsho','tshoh','tshok','tshong','tshoo','tshu','tshua','tshuah','tshuan','tshuang','tshuann','tshue','tshueh','tshuh','tshui','tshun','tshut','tsi','tsia','tsiah','tsiam','tsian','tsiang','tsiann','tsiap','tsiat','tsiau','tsih','tsik','tsim','tsin','tsing','tsinn','tsio','tsioh','tsiok','tsiong','tsip','tsit','tsiu','tsiuh','tsiunn','tsng','tso','tsoh','tsok','tsong','tsoo','tsu','tsua','tsuah','tsuainn','tsuan','tsuann','tsuat','tsue','tsueh','tsuh','tsui','tsun','tsut','tu','tua','tuah','tuan','tuann','tuat','tue','tuh','tui','tuinn','tun','tut','u','ua','uah','uai','uainn','uan','uang','uann','uat','ue','ueh','uh','ui','uih','uinn','un','ut']
             self.syllables = set([self.__strip_mark(self.conversion_func((s, False))) for s in syllables])
 
         class PronsDictProxy:
@@ -169,6 +224,7 @@ class Converter(object):
                     return self.singapore_prons.get(key, default)
                 return self.prons_dict.get(key, default)
 
+        # NOTE: build mental model here
         class WordDict:
             def __init__(self, word_dict, prons_dict, dialect, singapore_words):
                 self.word_dict = word_dict
@@ -178,9 +234,17 @@ class Converter(object):
 
             def __getitem__(self, key):
                 value = self.word_dict.get(key)
-                if not value or self.dialect == 'south': return value
+                if not value or self.dialect == 'south': 
+                    return value
+                
                 parts = [s for s in re.split('(--|-)', value.lower()) if s]
-                variations = {char: {variation.split('/')[0]: variation.split('/')[1] if len(variation.split('/')) > 1 else variation.split('/')[0] for variation in self.prons_dict.get(char, [])} for char in key}
+                variations = {
+                    char: {
+                        variation.split('/')[0]: (varies[1] if len(varies := variation.split('/')) > 1 else varies[0])
+                           for variation in self.prons_dict.get(char, [])
+                        } 
+                    for char in key
+                }
 
                 if self.dialect == 'singapore':
                     substrings = set(
@@ -209,7 +273,10 @@ class Converter(object):
             def __contains__(self, key):
                 return key in self.word_dict
 
-        self.word_dict = WordDict(word_dict, PronsDictProxy(prons_dict, dialect, self.__singapore_prons), dialect, self.__singapore_words)
+        self.word_dict = WordDict(
+            word_dict, PronsDictProxy(prons_dict, dialect, self.__singapore_prons), 
+            dialect, self.__singapore_words
+        )
 
         if dialect == 'north' or dialect == 'singapore':
             self.sandhi_conversion.update({'5':'3'})
@@ -224,14 +291,18 @@ class Converter(object):
     ### Interface functions
 
     # Convert tokenised text into specified transliteration system
-    def get(self, input):
-        converted = Tokeniser(False).tokenise(input)
-        converted = [self.__convert_tokenised(i).strip() for i in self.__tone_sandhi_position(converted)]
+    def get(self, input) -> str | Sentence:
+        token_words = self.tokenizer.tokenise(input)
+        converted = self.__tone_sandhi_position(token_words)
+        converted = [self.__convert_tokenised(i).strip() for i in converted]
+
+        sent = Sentence(input, self.system, self.tone_format, token_words, converted)
+        
         if self.punctuation == 'format':
-            return self.__format_punctuation_western(converted)
-        if self.output_tokens:
-            return converted
-        return self.__format_punctuation_cjk(converted)
+            sent.trans_tokens = sent.convert_punctuation_western()
+            return sent if self.output_tokens else sent.format_punctuation_western() 
+        else:
+            return sent if self.output_tokens else sent.format_punctuation_cjk()
 
 
     ### Input formatting
@@ -240,15 +311,17 @@ class Converter(object):
     def __convert_tokenised(self, word):
         if word[0] in self.word_dict:
             word = (self.word_dict[word[0]],) + word[1:]
-        elif not self.convert_non_cjk or word[0] in ".,!?\"#$%&()*+/:;<=>@[\\]^`{|}~\t。．，、！？；：（）［］【】「」“”":
+        elif not self.convert_non_cjk or word[0] in punct_all:
             return word[0]
+        
         word = self.conversion_func(word).replace('---','--')
-        if self.format == 'number' and self.system in ['tailo','poj']:
-            word = self.__mark_to_number(word)
-        if self.format == 'strip':
+
+        if self.tone_format == 'strip':
             word = self.__strip_mark(word)
+
         if self.delimiter == '' and self.apostrophe:
             return self.__add_apostrophes(word)
+        
         return word.replace('--', self.suffix_token).replace('-', self.delimiter).replace(self.suffix_token, '--')
 
 
@@ -277,7 +350,7 @@ class Converter(object):
     def __get_number_tones(self, input):
         words = self.__preprocess_word(input[0])
         number_tones = [self.__get_number_tone(w) for w in words if len(w) > 0]
-        if self.sandhi in ['auto','exc_last','incl_last'] or self.format == 'number':
+        if self.sandhi in ['auto','exc_last','incl_last'] or self.tone_format == 'number':
             replace_with_zero = False
             number_tones = [s[:-1] + '0' if replace_with_zero or (replace_with_zero := s[-1] == '0') else s for s in number_tones]
         if self.sandhi in ['auto','exc_last','incl_last']:
@@ -296,15 +369,19 @@ class Converter(object):
 
 
     # Helper to convert word from Tai-lo to number
-    def __mark_to_number(self, input):
-        input = input.replace('--','-'+self.suffix_token)
-        words = input.split('-')
-        input = '-'.join(self.__get_number_tone(w) for w in words if len(w) > 0)
-        return input.replace(self.suffix_token, '--')
+    def mark_to_number(self, tran, han):
+        if han not in self.word_dict.word_dict:
+            return tran
+        tran = tran.replace('--','-'+self.suffix_token)
+        words = tran.split('-')
+        tran = '-'.join(self.__get_number_tone(w) for w in words if len(w) > 0)
+        return tran.replace(self.suffix_token, '--')
 
 
     # Helper to convert syllable from Tai-lo diacritic tones to number tones
     def __get_number_tone(self, input):
+        sandhi = self.sandhi
+        tone_format = self.tone_format
         finals = ['p','t','k','h']
         lower_input = input.lower()
         if re.search("á|é|í|ó|ú|ḿ|ńg|́", lower_input): input += '2'
@@ -314,9 +391,11 @@ class Converter(object):
         elif re.search('̍', lower_input): input += '8'
         elif lower_input[-1] in finals: input += '4'
         else: input += '1'
-        if input.startswith(self.suffix_token) and (input[-2:] == 'h4' or self.sandhi in ['auto','exc_last','incl_last'] or self.format == 'number'):
+        
+        if input.startswith(self.suffix_token) \
+            and (input[-2:] == 'h4' or sandhi in ['auto','exc_last','incl_last'] or tone_format == 'number'):
             input = input[:-1] + '0'
-        input = "".join(c for c in unicodedata.normalize("NFD", input) if unicodedata.category(c) != "Mn")
+        input = self.norm_diacritic(input)
         return input
 
 
@@ -327,11 +406,12 @@ class Converter(object):
 
     # Helper to convert syllable from Tai-lo number tones to diacritic tones
     def __get_mark_tone(self, input, placement, tones):
+        syllable, number = input[:-1], int(input[-1])
         for s in placement:
-            if s.replace(self.tt, '') in input:
-                input = input.replace(s.replace(self.tt, ''), s.replace(self.tt, tones[int(input[-1])]))
+            if (target := s.replace(self.tt, '')) in syllable:
+                syllable = syllable.replace(target, s.replace(self.tt, tones[number]))
                 break
-        return unicodedata.normalize('NFC', input[:-1])
+        return unicodedata.normalize('NFC', syllable)
 
 
     # Helper to apply tone sandhi to a word
@@ -370,6 +450,10 @@ class Converter(object):
                 result_list[i] = (result_list[i][0], False)
         return result_list
 
+    @staticmethod
+    def norm_diacritic(s):
+        return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+
 
     # Helper function to remove tone markings
     def __strip_mark(self, input):
@@ -379,17 +463,14 @@ class Converter(object):
             input = input.translate(str.maketrans('','',''.join(['ˋ','˪','ˊ','˫','˙'])))
         if self.system == 'ipa':
             input = input.translate(str.maketrans('','',''.join(['¹','²','³','⁴','⁵'])))
-        else: input = "".join(c for c in unicodedata.normalize("NFD", input) if unicodedata.category(c) != "Mn")
+        else: input = self.norm_diacritic(input)
         return input
 
 
     # Helper function to determine if an apostrophe is needed between two syllables
     def __needs_apostrophe(self, s1, s2):
-        def normalise(s):
-            return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn").lower()
-        s1n = normalise(s1)
-        s2n = normalise(s2)
-
+        s1n = self.norm_diacritic(s1).lower()
+        s2n = self.norm_diacritic(s2).lower()
         combined = s1n + s2n
 
         # Case 1: merges into a valid syllable
@@ -440,19 +521,26 @@ class Converter(object):
     ### Tai-lo to other transliteration systems converting
 
     # Helper to convert syllable from Tai-lo to Tai-lo
-    def __tailo_to_tailo(self, input):
-        input = '-'.join(self.__get_mark_tone(self.__convert_variant(nt), self.placement, self.tones) for nt in self.__get_number_tones(input))
-        return input.replace(self.suffix_token, '--')
+    def __tailo_to_tailo(self, input, poj=False):
+        output_tones = self.__get_number_tones(input)
+        output_tones = [self.__convert_variant(nt) for nt in output_tones]
+
+        if poj:
+            output_tones = [self.__replacement_tool(self.convert, nt) for nt in output_tones]
+
+        if self.tone_format != 'number': # `mark` (diacritical), `strip` (no tones)
+            output_tones = [self.__get_mark_tone(tone, self.placement, self.tones) for tone in output_tones]
+        else:
+            if poj:
+                output_tones = [self.norm_diacritic(tone) for tone in output_tones]
+        
+        output_tones = '-'.join(output_tones)
+        return output_tones.replace(self.suffix_token, '--')
 
 
     # Helper to convert syllable from Tai-lo to POJ
     def __tailo_to_poj(self, input):
-        number_tones = self.__get_number_tones(input)
-        input = '-'.join(
-            self.__get_mark_tone(self.__replacement_tool(self.convert, self.__convert_variant(nt)), self.placement, self.tones) 
-            for nt in number_tones
-        )
-        return input.replace(self.suffix_token, '--')
+        return self.__tailo_to_tailo(input, poj=True)
 
 
     # Helper to convert syllable from Tai-lo to 方音符號 (zhuyin)
@@ -462,7 +550,7 @@ class Converter(object):
             nt = self.__replacement_tool(self.convert, self.__convert_variant(nt)).replace(self.suffix_token, '')
             if len(nt) > 2 and nt[-2] == 'ㄋ':
                 nt = nt[:-2] + 'ㄣ' + nt[-1]
-            if self.format != 'number':
+            if self.tone_format != 'number':
                 nt = ''.join(self.tones[int(t)] if t.isnumeric() else t for t in nt)
             output.append(nt)
         return '-'.join(output).replace(self.suffix_token, '')
@@ -470,8 +558,10 @@ class Converter(object):
 
     # Helper to convert syllable from Tai-lo to TLPA
     def __tailo_to_tlpa(self, input):
-        input = '-'.join(self.__replacement_tool(self.convert, self.__convert_variant(nt)) for nt in self.__get_number_tones(input))
-        return input.replace(self.suffix_token, '')
+        output_tones = self.__get_number_tones(input)
+        output_tones = [self.__replacement_tool(self.convert, self.__convert_variant(nt)) for nt in output_tones]
+        output_tones = '-'.join(output_tones)
+        return output_tones.replace(self.suffix_token, '')
 
 
     # Helper to convert syllable from Tai-lo to Bbanlam pingyim
@@ -509,7 +599,7 @@ class Converter(object):
                 replaced = replaced[:insert_pos] + 'n' + replaced[insert_pos:]
             if nt[-3:-1] in ['ng','Ng']: # Coda ng
                 replaced = replaced[:-4] + nt[-3:-1] + nt[-1]
-            if self.format != 'number':
+            if self.tone_format != 'number':
                 output.append(self.__get_mark_tone(replaced, self.placement, self.tones))
             else:
                 output.append(replaced)
@@ -518,14 +608,14 @@ class Converter(object):
 
     # Helper to convert syllable from Tai-lo to Tong-iong ping-im
     def __tailo_to_ti(self, input):
-        number_tones = [nt[:-2] + 'or' + nt[-1] if nt[-2] == 'o' else nt for nt in self.__get_number_tones(input)]
-        input = '-'.join(
-            self.__get_mark_tone(self.__replacement_tool(self.convert, self.__convert_variant(nt)), self.placement, self.tones) 
-            if self.format != 'number' 
-            else self.__replacement_tool(self.convert, self.__convert_variant(nt)) 
-            for nt in number_tones
-        )
-        return input.replace(self.suffix_token, '--')
+        output_tones = [nt[:-2] + 'or' + nt[-1] if nt[-2] == 'o' else nt for nt in self.__get_number_tones(input)]
+
+        output_tones = [self.__replacement_tool(self.convert, self.__convert_variant(nt)) for nt in output_tones]
+        if self.tone_format != 'number': # `mark` (diacritical), `strip` (no tones)
+            output_tones = [self.__get_mark_tone(tone, self.placement, self.tones) for tone in output_tones]
+
+        output_tones = '-'.join(output_tones)
+        return output_tones.replace(self.suffix_token, '--')
     
 
     # Helper to convert syllable from Tai-lo to International Phonetic Alphabet
@@ -542,52 +632,10 @@ class Converter(object):
             if len(nt) == 2 and nt[0] == 'm':
                 nt = 'm̩' + nt[-1]
             nt = self.__replacement_tool(self.convert2, self.__convert_variant(nt))
-            if self.format != 'number':
+            if self.tone_format != 'number':
                 nt = ''.join(self.tones[int(t)] if t.isnumeric() else t for t in nt)
             output.append(unicodedata.normalize('NFC', nt))
         return '-'.join(output).replace(self.suffix_token, '')
-
-
-    ### Converted output formatting
-
-    # Helper to convert Chinese punctuation to Latin punctuation with appropriate spacing
-    def __format_punctuation_western(self, input):
-        punctuation_mapping = {'。':'.', '．':' ', '，':',', '、':',', '！':'!', '？':'?', '；':';', '：':':',
-                               '）':')', '］':']', '】':']', '（':'(', '［':'[', '【':'['}
-        input = [punctuation_mapping.get(token, token) for token in input]
-        input = self.__format_text(input)
-        if self.output_tokens:
-            return input
-        input = ' '.join(input).strip()
-        left_space = {'.':'.', ',':',', '!':'!', '?':'?', ';':';', ':':':', ')':')', ']':']', '」':'"', '”':'"', '--':'--'}
-        right_space = {'(':'(', '[':'[', '「':'"', '“':'"'}
-        for left, space in left_space.items():
-            input = input.replace(' ' + left, space).replace(left, space)
-        for right, space in right_space.items():
-            input = input.replace(right + ' ', space).replace(right, space) 
-        return input
-    
-
-    # Helper to restore original CJK punctuation with appropriate spacing
-    def __format_punctuation_cjk(self, input):
-        input = ' '.join(input).strip()
-        left_space = ['。', '．', '，', '、', '！', '？', '；', '：', '）', '］', '】', '」', '”', '--']
-        right_space = ['（', '［', '【', '「', '“']
-        for punct in left_space:
-            input = input.replace(' ' + punct + ' ', punct).replace(' ' + punct, punct)
-        for punct in right_space:
-            input = input.replace(' ' + punct + ' ', punct).replace(punct + ' ', punct)
-        return input
-
-
-    # Helper to capitalise text in according to punctuation
-    def __format_text(self, tokens):
-        capitalise_next = True
-        for i, t in enumerate(tokens):
-            if capitalise_next and t:
-                tokens[i] = t[0].upper() + t[1:]
-            capitalise_next = t in {'.', '!', '?'}
-        return tokens
 
 
 """
@@ -600,22 +648,27 @@ class Tokeniser(object):
     def __init__(self, keep_original=True):
         self.keep_original = keep_original
 
-    # Tokenise the text into separate words
-    def tokenise(self, input):
-        traditional = to_traditional(input)
-        n = len(traditional)
+    def search_dp(self, text):
+        n = len(text)
         dp = [{'score': float('inf'), 'last_word': None} for _ in range(n+1)]
         dp[0]['score'] = 0
         for i in range(1, n+1):
-            for j in range(max(0, i-4), i):
-                word = traditional[j:i]
+            for j in range(max(0, i-4), i): # set 4 for max han chars, but should it be longer?
+                word = text[j:i]
                 if word_dict.get(word) or len(word) == 1:
                     score = dp[j]['score'] + 1
                     if score < dp[i]['score']:
                         dp[i]['score'] = score
                         dp[i]['last_word'] = word
+        return dp
+
+    # Tokenise the text into separate words
+    def tokenise(self, input):
+        traditional = to_traditional(input)
+        dp = self.search_dp(traditional)
+
         tokenised = []
-        i = n
+        i = len(traditional)
         while i > 0:
             word = dp[i]['last_word']
             if tokenised and not (is_cjk(tokenised[-1]) or is_cjk(word)):
@@ -624,21 +677,22 @@ class Tokeniser(object):
                 tokenised.append(word)
             i -= len(word)
         tokenised.reverse()
-        punctuations = re.compile(r"([.,!?\"#$%&()*+/:;<=>@[\]^`{|}~\t。．，、！？；：（）［］【】「」“”]\s*)")
+
         if self.keep_original:
             indices = [0] + [len(item) for item in tokenised]
             tokenised = [input[sum(indices[:i+1]):sum(indices[:i+2])] for i in range(len(indices)-1)]
+
         tokenised = [
             item 
             for word in tokenised 
-            for subword in re.split(punctuations, word) if subword 
+            for subword in re.split(punct_regex, word) if subword 
             for item in subword.split(" ") if item
         ]
         return [
             subword 
             for word in tokenised 
             for subword in (
-                (word[:-1], word[-1]) if (word[-1] == '矣') and len(word) > 1 
+                (word[:-1], word[-1]) if ((word[-1] == '矣') and len(word) > 1)
                 else (word,)
             )
         ]

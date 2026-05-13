@@ -48,7 +48,7 @@ class TestConvertNonCJK(unittest.TestCase):
         ]
         for transl, system in test_data:
             data = list(zip(hanji_data, transl))
-            checker(self, data, Converter(system=system, punctuation='none', apostrophe=True, delimiter='', format='number'), Converter(system=system, dialect="north", punctuation='none', apostrophe=True, delimiter='', format='number'))
+            checker(self, data, Converter(system=system, punctuation='none', apostrophe=True, delimiter='', tone_format='number'), Converter(system=system, dialect="north", punctuation='none', apostrophe=True, delimiter='', tone_format='number'))
 
     def test_apostrophe_delimiter_strip(self):
         test_data = [
@@ -62,4 +62,4 @@ class TestConvertNonCJK(unittest.TestCase):
         ]
         for transl, system in test_data:
             data = list(zip(hanji_data, transl))
-            checker(self, data, Converter(system=system, punctuation='none', apostrophe=True, delimiter='', format='strip'), Converter(system=system, dialect="north", punctuation='none', apostrophe=True, delimiter='', format='strip'))
+            checker(self, data, Converter(system=system, punctuation='none', apostrophe=True, delimiter='', tone_format='strip'), Converter(system=system, dialect="north", punctuation='none', apostrophe=True, delimiter='', tone_format='strip'))

@@ -20,7 +20,7 @@ class TestDelimiter(unittest.TestCase):
         ]
         for transl, system in test_data:
             data = list(zip(hanji_data, transl))
-            checker(self, data, Converter(system=system, punctuation='none', format='mark'), Converter(system=system, dialect="north", punctuation='none', format='mark'))
+            checker(self, data, Converter(system=system, punctuation='none', tone_format='mark'), Converter(system=system, dialect="north", punctuation='none', tone_format='mark'))
 
     def test_number(self):
         test_data = [
@@ -34,7 +34,7 @@ class TestDelimiter(unittest.TestCase):
         ]
         for transl, system in test_data:
             data = list(zip(hanji_data, transl))
-            checker(self, data, Converter(system=system, punctuation='none', format='number'), Converter(system=system, dialect="north", punctuation='none', format='number'))
+            checker(self, data, Converter(system=system, punctuation='none', tone_format='number'), Converter(system=system, dialect="north", punctuation='none', tone_format='number'))
 
     def test_strip(self):
         test_data = [
@@ -48,4 +48,4 @@ class TestDelimiter(unittest.TestCase):
         ]
         for transl, system in test_data:
             data = list(zip(hanji_data, transl))
-            checker(self, data, Converter(system=system, punctuation='none', format='strip'), Converter(system=system, dialect="north", punctuation='none', format='strip'))
+            checker(self, data, Converter(system=system, punctuation='none', tone_format='strip'), Converter(system=system, dialect="north", punctuation='none', tone_format='strip'))
