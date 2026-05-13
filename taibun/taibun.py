@@ -423,7 +423,6 @@ class Converter(object):
     def __needs_apostrophe(self, s1, s2):
         s1n = self.__normalise(s1).lower()
         s2n = self.__normalise(s2).lower()
-
         combined = s1n + s2n
 
         # Case 1: merges into a valid syllable
@@ -478,23 +477,22 @@ class Converter(object):
         output_tones = self.__get_number_tones(input)
         output_tones = [self.__convert_variant(nt) for nt in output_tones]
 
-        if self.format != 'number':
-            output_tones = [self.__get_mark_tone(tone, self.placement, self.tones) for tone in output_tones]
+        if poj:
+            output_tones = [self.__replacement_tool(self.convert, nt) for nt in output_tones]
 
-        input = '-'.join(output_tones)
-        return input.replace(self.suffix_token, '--')
+        if self.format != 'number': # `mark` (diacritical), `strip` (no tones)
+            output_tones = [self.__get_mark_tone(tone, self.placement, self.tones) for tone in output_tones]
+        else:
+            if poj:
+                output_tones = [self.__normalise(tone) for tone in output_tones]
+        
+        output_tones = '-'.join(output_tones)
+        return output_tones.replace(self.suffix_token, '--')
 
 
     # Helper to convert syllable from Tai-lo to POJ
     def __tailo_to_poj(self, input):
-        output_tones = self.__get_number_tones(input)
-        output_tones = [self.__replacement_tool(self.convert, self.__convert_variant(nt)) for nt in output_tones]
-        output_tones = [self.__get_mark_tone(tone, self.placement, self.tones) for tone in output_tones]
-        if self.format == 'number':
-            output_tones = [self.__mark_to_number(tone) for tone in output_tones]
-
-        input = '-'.join(output_tones)
-        return input.replace(self.suffix_token, '--')
+        return self.__tailo_to_tailo(input, poj=True)
 
 
     # Helper to convert syllable from Tai-lo to 方音符號 (zhuyin)
@@ -514,8 +512,8 @@ class Converter(object):
     def __tailo_to_tlpa(self, input):
         output_tones = self.__get_number_tones(input)
         output_tones = [self.__replacement_tool(self.convert, self.__convert_variant(nt)) for nt in output_tones]
-        input = '-'.join(output_tones)
-        return input.replace(self.suffix_token, '')
+        output_tones = '-'.join(output_tones)
+        return output_tones.replace(self.suffix_token, '')
 
 
     # Helper to convert syllable from Tai-lo to Bbanlam pingyim
@@ -562,14 +560,14 @@ class Converter(object):
 
     # Helper to convert syllable from Tai-lo to Tong-iong ping-im
     def __tailo_to_ti(self, input):
-        number_tones = [nt[:-2] + 'or' + nt[-1] if nt[-2] == 'o' else nt for nt in self.__get_number_tones(input)]
-        input = '-'.join(
-            self.__get_mark_tone(self.__replacement_tool(self.convert, self.__convert_variant(nt)), self.placement, self.tones) 
-            if self.format != 'number' 
-            else self.__replacement_tool(self.convert, self.__convert_variant(nt)) 
-            for nt in number_tones
-        )
-        return input.replace(self.suffix_token, '--')
+        output_tones = [nt[:-2] + 'or' + nt[-1] if nt[-2] == 'o' else nt for nt in self.__get_number_tones(input)]
+
+        output_tones = [self.__replacement_tool(self.convert, self.__convert_variant(nt)) for nt in output_tones]
+        if self.format != 'number': # `mark` (diacritical), `strip` (no tones)
+            output_tones = [self.__get_mark_tone(tone, self.placement, self.tones) for tone in output_tones]
+
+        output_tones = '-'.join(output_tones)
+        return output_tones.replace(self.suffix_token, '--')
     
 
     # Helper to convert syllable from Tai-lo to International Phonetic Alphabet
@@ -596,15 +594,18 @@ class Converter(object):
 
     # Helper to convert Chinese punctuation to Latin punctuation with appropriate spacing
     def __format_punctuation_western(self, input):
-        punctuation_mapping = {'。':'.', '．':' ', '，':',', '、':',', '！':'!', '？':'?', '；':';', '：':':',
-                               '）':')', '］':']', '】':']', '（':'(', '［':'[', '【':'['}
+        punctuation_mapping = {
+            '。':'.', '．':' ', '，':',', '、':',', '！':'!', '？':'?', '；':';', '：':':',
+            '）':')', '］':']', '】':']', '（':'(', '［':'[', '【':'['
+        }
+        left_space = {'.':'.', ',':',', '!':'!', '?':'?', ';':';', ':':':', ')':')', ']':']', '」':'"', '”':'"', '--':'--'}
+        right_space = {'(':'(', '[':'[', '「':'"', '“':'"'}
         input = [punctuation_mapping.get(token, token) for token in input]
         input = self.__format_text(input)
         if self.output_tokens:
             return input
+
         input = ' '.join(input).strip()
-        left_space = {'.':'.', ',':',', '!':'!', '?':'?', ';':';', ':':':', ')':')', ']':']', '」':'"', '”':'"', '--':'--'}
-        right_space = {'(':'(', '[':'[', '「':'"', '“':'"'}
         for left, space in left_space.items():
             input = input.replace(' ' + left, space).replace(left, space)
         for right, space in right_space.items():
@@ -644,22 +645,27 @@ class Tokeniser(object):
     def __init__(self, keep_original=True):
         self.keep_original = keep_original
 
-    # Tokenise the text into separate words
-    def tokenise(self, input):
-        traditional = to_traditional(input)
-        n = len(traditional)
+    def search_dp(self, text):
+        n = len(text)
         dp = [{'score': float('inf'), 'last_word': None} for _ in range(n+1)]
         dp[0]['score'] = 0
         for i in range(1, n+1):
-            for j in range(max(0, i-4), i):
-                word = traditional[j:i]
+            for j in range(max(0, i-4), i): # set 4 for max han chars, but should it be longer?
+                word = text[j:i]
                 if word_dict.get(word) or len(word) == 1:
                     score = dp[j]['score'] + 1
                     if score < dp[i]['score']:
                         dp[i]['score'] = score
                         dp[i]['last_word'] = word
+        return dp
+
+    # Tokenise the text into separate words
+    def tokenise(self, input):
+        traditional = to_traditional(input)
+        dp = self.search_dp(traditional)
+
         tokenised = []
-        i = n
+        i = len(traditional)
         while i > 0:
             word = dp[i]['last_word']
             if tokenised and not (is_cjk(tokenised[-1]) or is_cjk(word)):
@@ -668,9 +674,11 @@ class Tokeniser(object):
                 tokenised.append(word)
             i -= len(word)
         tokenised.reverse()
+
         if self.keep_original:
             indices = [0] + [len(item) for item in tokenised]
             tokenised = [input[sum(indices[:i+1]):sum(indices[:i+2])] for i in range(len(indices)-1)]
+
         tokenised = [
             item 
             for word in tokenised 
@@ -681,7 +689,7 @@ class Tokeniser(object):
             subword 
             for word in tokenised 
             for subword in (
-                (word[:-1], word[-1]) if (word[-1] == '矣') and len(word) > 1 
+                (word[:-1], word[-1]) if ((word[-1] == '矣') and len(word) > 1)
                 else (word,)
             )
         ]
