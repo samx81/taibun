@@ -19,8 +19,8 @@ with open('output.txt', 'w', encoding='utf-8') as f:
         c_north = Converter(system=s, dialect="north", tone_format=format, delimiter=delimiter, apostrophe=apostrophe, sandhi=sandhi, punctuation=punctuation, convert_non_cjk=convert_non_cjk, output_tokens=output_tokens)
         transl = []
         for hanji in hanji_data:
-            south = c_south.get(hanji)
-            north = c_north.get(hanji)
+            south = c_south.get(hanji).trans_tokens
+            north = c_north.get(hanji).trans_tokens
             if south == north:
                 transl.append(south)
             else:

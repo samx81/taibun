@@ -38,7 +38,50 @@ class Sentence:
             return self.trans_tokens
         else:
             return [Converter(tone_format='number').mark_to_number(tk, han) for tk, han in zip(self.trans_tokens, self.han_tokens)]
+        
+    ### Converted output formatting
+    def convert_punctuation_western(self):
+        punctuation_mapping = {
+            '。':'.', '．':' ', '，':',', '、':',', '！':'!', '？':'?', '；':';', '：':':',
+            '）':')', '］':']', '】':']', '（':'(', '［':'[', '【':'['
+        }
+        tokens = [punctuation_mapping.get(token, token) for token in self.trans_tokens]
+        tokens = self.__format_text(tokens)
+        return tokens
 
+    # Helper to convert Chinese punctuation to Latin punctuation with appropriate spacing
+    def format_punctuation_western(self):
+        left_space = {'.':'.', ',':',', '!':'!', '?':'?', ';':';', ':':':', ')':')', ']':']', '」':'"', '”':'"', '--':'--'}
+        right_space = {'(':'(', '[':'[', '「':'"', '“':'"'}
+        western_tokens = self.convert_punctuation_western()
+        complete_sent = ' '.join(western_tokens).strip()
+        for left, space in left_space.items():
+            complete_sent = complete_sent.replace(' ' + left, space).replace(left, space)
+        for right, space in right_space.items():
+            complete_sent = complete_sent.replace(right + ' ', space).replace(right, space) 
+        return complete_sent
+    
+
+    # Helper to restore original CJK punctuation with appropriate spacing
+    def format_punctuation_cjk(self):
+        complete_sent = ' '.join(self.trans_tokens).strip()
+        left_space = ['。', '．', '，', '、', '！', '？', '；', '：', '）', '］', '】', '」', '”', '--']
+        right_space = ['（', '［', '【', '「', '“']
+        for punct in left_space:
+            complete_sent = complete_sent.replace(' ' + punct + ' ', punct).replace(' ' + punct, punct)
+        for punct in right_space:
+            complete_sent = complete_sent.replace(' ' + punct + ' ', punct).replace(punct + ' ', punct)
+        return complete_sent
+
+    
+    # Helper to capitalise text in according to punctuation
+    def __format_text(self, tokens):
+        capitalise_next = True
+        for i, t in enumerate(tokens):
+            if capitalise_next and t:
+                tokens[i] = t[0].upper() + t[1:]
+            capitalise_next = t in {'.', '!', '?'}
+        return tokens
 
 
 """
@@ -238,15 +281,18 @@ class Converter(object):
     ### Interface functions
 
     # Convert tokenised text into specified transliteration system
-    def get(self, input):
+    def get(self, input) -> str | Sentence:
         token_words = self.tokenizer.tokenise(input)
         converted = self.__tone_sandhi_position(token_words)
         converted = [self.__convert_tokenised(i).strip() for i in converted]
 
+        sent = Sentence(input, self.system, self.tone_format, token_words, converted)
+        
         if self.punctuation == 'format':
-            return self.__format_punctuation_western(converted)
+            sent.trans_tokens = sent.convert_punctuation_western()
+            return sent if self.output_tokens else sent.format_punctuation_western() 
         else:
-            return self.__format_punctuation_cjk(converted)
+            return sent if self.output_tokens else sent.format_punctuation_cjk()
 
 
     ### Input formatting
@@ -324,6 +370,8 @@ class Converter(object):
 
     # Helper to convert syllable from Tai-lo diacritic tones to number tones
     def __get_number_tone(self, input):
+        sandhi = self.sandhi
+        tone_format = self.tone_format
         finals = ['p','t','k','h']
         lower_input = input.lower()
         if re.search("á|é|í|ó|ú|ḿ|ńg|́", lower_input): input += '2'
@@ -335,7 +383,7 @@ class Converter(object):
         else: input += '1'
         
         if input.startswith(self.suffix_token) \
-            and (input[-2:] == 'h4' or self.sandhi in ['auto','exc_last','incl_last'] or self.tone_format == 'number'):
+            and (input[-2:] == 'h4' or sandhi in ['auto','exc_last','incl_last'] or tone_format == 'number'):
             input = input[:-1] + '0'
         input = self.__normalise(input)
         return input
@@ -392,7 +440,8 @@ class Converter(object):
                 result_list[i] = (result_list[i][0], False)
         return result_list
 
-    def __normalise(self, s):
+    @staticmethod
+    def __normalise(s):
         return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
 
 
@@ -577,54 +626,6 @@ class Converter(object):
                 nt = ''.join(self.tones[int(t)] if t.isnumeric() else t for t in nt)
             output.append(unicodedata.normalize('NFC', nt))
         return '-'.join(output).replace(self.suffix_token, '')
-
-
-    ### Converted output formatting
-
-    # Helper to convert Chinese punctuation to Latin punctuation with appropriate spacing
-    def __format_punctuation_western(self, input):
-        punctuation_mapping = {
-            '。':'.', '．':' ', '，':',', '、':',', '！':'!', '？':'?', '；':';', '：':':',
-            '）':')', '］':']', '】':']', '（':'(', '［':'[', '【':'['
-        }
-        left_space = {'.':'.', ',':',', '!':'!', '?':'?', ';':';', ':':':', ')':')', ']':']', '」':'"', '”':'"', '--':'--'}
-        right_space = {'(':'(', '[':'[', '「':'"', '“':'"'}
-        input = [punctuation_mapping.get(token, token) for token in input]
-        input = self.__format_text(input)
-        if self.output_tokens:
-            return input
-
-        input = ' '.join(input).strip()
-        for left, space in left_space.items():
-            input = input.replace(' ' + left, space).replace(left, space)
-        for right, space in right_space.items():
-            input = input.replace(right + ' ', space).replace(right, space) 
-        return input
-    
-
-    # Helper to restore original CJK punctuation with appropriate spacing
-    def __format_punctuation_cjk(self, input):
-        if self.output_tokens:
-            return input
-        
-        input = ' '.join(input).strip()
-        left_space = ['。', '．', '，', '、', '！', '？', '；', '：', '）', '］', '】', '」', '”', '--']
-        right_space = ['（', '［', '【', '「', '“']
-        for punct in left_space:
-            input = input.replace(' ' + punct + ' ', punct).replace(' ' + punct, punct)
-        for punct in right_space:
-            input = input.replace(' ' + punct + ' ', punct).replace(punct + ' ', punct)
-        return input
-
-
-    # Helper to capitalise text in according to punctuation
-    def __format_text(self, tokens):
-        capitalise_next = True
-        for i, t in enumerate(tokens):
-            if capitalise_next and t:
-                tokens[i] = t[0].upper() + t[1:]
-            capitalise_next = t in {'.', '!', '?'}
-        return tokens
 
 
 """
