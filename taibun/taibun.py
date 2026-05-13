@@ -1,54 +1,44 @@
-import os
 import re
 import unicodedata
+from pathlib import Path
+from dataclasses import dataclass
 
 import msgpack
 
-data_dir = os.path.join(os.path.dirname(__file__), "data")
-with open(os.path.join(data_dir, "words.msgpack"), 'rb') as f:
+from taibun.utils import is_cjk, to_traditional
+
+data_dir = Path(__file__).parent / "data"
+with open(data_dir / "words.msgpack", 'rb') as f:
     word_dict = msgpack.unpackb(f.read(), raw=False)
-with open(os.path.join(data_dir, "traditional.msgpack"), 'rb') as f:
-    trad_dict = msgpack.unpackb(f.read(), raw=False)
-with open(os.path.join(data_dir, "simplified.msgpack"), 'rb') as f:
-    simp_dict = {**{v: k for k, v in trad_dict.items() if len(k) == 1}, **msgpack.unpackb(f.read(), raw=False)}
-with open(os.path.join(data_dir, "vars.msgpack"), 'rb') as f:
-    vars_dict = msgpack.unpackb(f.read(), raw=False)
-with open(os.path.join(data_dir, "prons.msgpack"), 'rb') as f:
+
+with open(data_dir / "prons.msgpack", 'rb') as f:
     prons_dict = msgpack.unpackb(f.read(), raw=False)
 
 punctuations = ".,!?\"#$%&()*+/:;<=>@[\\]^`{|}~\t。．，、！？；：（）［］【】「」“”"
 punctuations_regex = re.compile(rf"([{punctuations}]\s*)")
 
-# Helper to check if the character is a Chinese character
-def is_cjk(input):
-    return all(
-        0x4E00 <= ord(char) <= 0x9FFF or  # BASIC
-        0x3400 <= ord(char) <= 0x4DBF or  # Ext A
-        0x20000 <= ord(char) <= 0x2A6DF or  # Ext B
-        0x2A700 <= ord(char) <= 0x2EBEF or  # Ext C,D,E,F
-        0x30000 <= ord(char) <= 0x323AF or  # Ext G,H
-        0x2EBF0 <= ord(char) <= 0x2EE5F  # Ext I
-        for char in input
-    )
+@dataclass
+class Sentence:
+    sent: str
+    system: str
+    tone_format: str
+    han_tokens: list[str]
+    trans_tokens: list[str]
 
-# Convert Traditional to Simplified characters
-def to_simplified(input):
-    return ''.join(simp_dict.get(c, c) for c in input)
+    @property
+    def segment_han(self):
+        return " ".join(self.han_tokens)
 
-# Convert Simplified to Traditional characters
-def to_traditional(input):
-    input = ''.join(vars_dict.get(c, c) for c in input)
-    traditional = []
-    while input:
-        for j in range(4, 0, -1):
-            if len(input) < j:
-                continue
-            word = input[:j]
-            if word in trad_dict or j == 1:
-                traditional.append(trad_dict.get(word, word))
-                input = input[j:]
-                break
-    return "".join(traditional)
+    @property
+    def segment_trans(self):
+        return " ".join(self.trans_tokens)
+    
+    def to_number(self):
+        if self.tone_format == 'number':
+            return self.trans_tokens
+        else:
+            return [Converter(tone_format='number').mark_to_number(tk, han) for tk, han in zip(self.trans_tokens, self.han_tokens)]
+
 
 
 """
@@ -113,13 +103,13 @@ class Converter(object):
     }
 
     def __init__(
-        self, system='Tailo', dialect='south', format='mark', 
+        self, system='Tailo', dialect='south', tone_format='mark', 
         delimiter=DEFAULT_DELIMITER, apostrophe=DEFAULT_APOSTROPHE, sandhi=DEFAULT_SANDHI, 
         punctuation='format', convert_non_cjk=False, output_tokens=False
     ):
         self.system = system.lower()
         self.dialect = dialect.lower()
-        self.format = format
+        self.tone_format = tone_format
         self.delimiter = delimiter if delimiter != self.DEFAULT_DELIMITER else self.__set_default_delimiter()
         self.apostrophe = apostrophe if apostrophe != self.DEFAULT_APOSTROPHE else self.__set_default_apostrophe()
         self.sandhi = sandhi if sandhi != self.DEFAULT_SANDHI else self.__set_default_sandhi()
@@ -255,11 +245,8 @@ class Converter(object):
 
         if self.punctuation == 'format':
             return self.__format_punctuation_western(converted)
-        
-        if self.output_tokens:
-            return converted
-        
-        return self.__format_punctuation_cjk(converted)
+        else:
+            return self.__format_punctuation_cjk(converted)
 
 
     ### Input formatting
@@ -273,7 +260,7 @@ class Converter(object):
         
         word = self.conversion_func(word).replace('---','--')
 
-        if self.format == 'strip':
+        if self.tone_format == 'strip':
             word = self.__strip_mark(word)
 
         if self.delimiter == '' and self.apostrophe:
@@ -307,7 +294,7 @@ class Converter(object):
     def __get_number_tones(self, input):
         words = self.__preprocess_word(input[0])
         number_tones = [self.__get_number_tone(w) for w in words if len(w) > 0]
-        if self.sandhi in ['auto','exc_last','incl_last'] or self.format == 'number':
+        if self.sandhi in ['auto','exc_last','incl_last'] or self.tone_format == 'number':
             replace_with_zero = False
             number_tones = [s[:-1] + '0' if replace_with_zero or (replace_with_zero := s[-1] == '0') else s for s in number_tones]
         if self.sandhi in ['auto','exc_last','incl_last']:
@@ -326,11 +313,13 @@ class Converter(object):
 
 
     # Helper to convert word from Tai-lo to number
-    def __mark_to_number(self, input):
-        input = input.replace('--','-'+self.suffix_token)
-        words = input.split('-')
-        input = '-'.join(self.__get_number_tone(w) for w in words if len(w) > 0)
-        return input.replace(self.suffix_token, '--')
+    def mark_to_number(self, tran, han):
+        if han not in self.word_dict.word_dict:
+            return tran
+        tran = tran.replace('--','-'+self.suffix_token)
+        words = tran.split('-')
+        tran = '-'.join(self.__get_number_tone(w) for w in words if len(w) > 0)
+        return tran.replace(self.suffix_token, '--')
 
 
     # Helper to convert syllable from Tai-lo diacritic tones to number tones
@@ -346,9 +335,9 @@ class Converter(object):
         else: input += '1'
         
         if input.startswith(self.suffix_token) \
-            and (input[-2:] == 'h4' or self.sandhi in ['auto','exc_last','incl_last'] or self.format == 'number'):
+            and (input[-2:] == 'h4' or self.sandhi in ['auto','exc_last','incl_last'] or self.tone_format == 'number'):
             input = input[:-1] + '0'
-        input = "".join(c for c in unicodedata.normalize("NFD", input) if unicodedata.category(c) != "Mn")
+        input = self.__normalise(input)
         return input
 
 
@@ -480,7 +469,7 @@ class Converter(object):
         if poj:
             output_tones = [self.__replacement_tool(self.convert, nt) for nt in output_tones]
 
-        if self.format != 'number': # `mark` (diacritical), `strip` (no tones)
+        if self.tone_format != 'number': # `mark` (diacritical), `strip` (no tones)
             output_tones = [self.__get_mark_tone(tone, self.placement, self.tones) for tone in output_tones]
         else:
             if poj:
@@ -502,7 +491,7 @@ class Converter(object):
             nt = self.__replacement_tool(self.convert, self.__convert_variant(nt)).replace(self.suffix_token, '')
             if len(nt) > 2 and nt[-2] == 'ㄋ':
                 nt = nt[:-2] + 'ㄣ' + nt[-1]
-            if self.format != 'number':
+            if self.tone_format != 'number':
                 nt = ''.join(self.tones[int(t)] if t.isnumeric() else t for t in nt)
             output.append(nt)
         return '-'.join(output).replace(self.suffix_token, '')
@@ -551,7 +540,7 @@ class Converter(object):
                 replaced = replaced[:insert_pos] + 'n' + replaced[insert_pos:]
             if nt[-3:-1] in ['ng','Ng']: # Coda ng
                 replaced = replaced[:-4] + nt[-3:-1] + nt[-1]
-            if self.format != 'number':
+            if self.tone_format != 'number':
                 output.append(self.__get_mark_tone(replaced, self.placement, self.tones))
             else:
                 output.append(replaced)
@@ -563,7 +552,7 @@ class Converter(object):
         output_tones = [nt[:-2] + 'or' + nt[-1] if nt[-2] == 'o' else nt for nt in self.__get_number_tones(input)]
 
         output_tones = [self.__replacement_tool(self.convert, self.__convert_variant(nt)) for nt in output_tones]
-        if self.format != 'number': # `mark` (diacritical), `strip` (no tones)
+        if self.tone_format != 'number': # `mark` (diacritical), `strip` (no tones)
             output_tones = [self.__get_mark_tone(tone, self.placement, self.tones) for tone in output_tones]
 
         output_tones = '-'.join(output_tones)
@@ -584,7 +573,7 @@ class Converter(object):
             if len(nt) == 2 and nt[0] == 'm':
                 nt = 'm̩' + nt[-1]
             nt = self.__replacement_tool(self.convert2, self.__convert_variant(nt))
-            if self.format != 'number':
+            if self.tone_format != 'number':
                 nt = ''.join(self.tones[int(t)] if t.isnumeric() else t for t in nt)
             output.append(unicodedata.normalize('NFC', nt))
         return '-'.join(output).replace(self.suffix_token, '')
@@ -615,6 +604,9 @@ class Converter(object):
 
     # Helper to restore original CJK punctuation with appropriate spacing
     def __format_punctuation_cjk(self, input):
+        if self.output_tokens:
+            return input
+        
         input = ' '.join(input).strip()
         left_space = ['。', '．', '，', '、', '！', '？', '；', '：', '）', '］', '】', '」', '”', '--']
         right_space = ['（', '［', '【', '「', '“']
