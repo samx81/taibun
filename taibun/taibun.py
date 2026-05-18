@@ -366,6 +366,17 @@ class Converter(object):
     def __replacement_tool(self, dictionary, input):
         pattern = re.compile('|'.join(dictionary.keys()))
         return pattern.sub(lambda m: dictionary[re.escape(m.group(0))], input)
+    
+    # Helper to convert word from number/Tai-lo to Tai-lo
+    def to_mark(self, tran):
+        # NOTE: self.tone_format should be `number` ?
+        tran = tran.replace('--','-'+self.suffix_token)
+        words = tran.split('-')
+        is_number_tone = all(w[-1].isdigit() for w in words if len(w) > 0)
+        if not is_number_tone:
+            words = [self.__get_number_tone(w) for w in words if len(w) > 0]
+        tran = '-'.join([self.__get_mark_tone(tone, self.placement, self.tones) for tone in words])
+        return tran.replace(self.suffix_token, '--')
 
 
     # Helper to convert word from Tai-lo to number
