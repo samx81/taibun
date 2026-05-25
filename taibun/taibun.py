@@ -417,6 +417,8 @@ class Converter(object):
 
     # Helper to convert syllable from Tai-lo number tones to diacritic tones
     def __get_mark_tone(self, input, placement, tones):
+        if not input.strip():
+            return input
         syllable, number = input[:-1], int(input[-1])
         for s in placement:
             if (target := s.replace(self.tt, '')) in syllable:
