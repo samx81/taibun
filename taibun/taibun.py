@@ -13,6 +13,10 @@ with open(data_dir / "words.msgpack", 'rb') as f:
 
 with open(data_dir / "prons.msgpack", 'rb') as f:
     prons_dict = msgpack.unpackb(f.read(), raw=False)
+
+with open(data_dir / "pinyin_map.msgpack", 'rb') as f:
+    pinyin_dict = msgpack.unpackb(f.read(), raw=False)
+
 punct_cjk = "。．，、！？；：（）［］【】「」"
 punct_all = ".,!?\"#$%&()*+/:;<=>@[\\]^`{|}~\t“”"+punct_cjk
 punct_regex = re.compile(rf"([{punct_all}]\s*)")
@@ -369,12 +373,15 @@ class Converter(object):
     
     # Helper to convert word from number/Tai-lo to Tai-lo
     def to_mark(self, tran):
-        # NOTE: self.tone_format should be `number` ?
         tran = tran.replace('--','-'+self.suffix_token)
         words = tran.split('-')
         is_number_tone = all(w[-1].isdigit() for w in words if len(w) > 0)
+
         if not is_number_tone:
             words = [self.__get_number_tone(w) for w in words if len(w) > 0]
+        if not all(c in pinyin_dict for c in words):
+            return tran.replace(self.suffix_token, '--')
+
         tran = '-'.join([self.__get_mark_tone(tone, self.placement, self.tones) for tone in words])
         return tran.replace(self.suffix_token, '--')
 
@@ -417,8 +424,6 @@ class Converter(object):
 
     # Helper to convert syllable from Tai-lo number tones to diacritic tones
     def __get_mark_tone(self, input, placement, tones):
-        if not input.strip():
-            return input
         syllable, number = input[:-1], int(input[-1])
         for s in placement:
             if (target := s.replace(self.tt, '')) in syllable:
